@@ -1,14 +1,16 @@
 # Nord Theme — Hermes Desktop plugin
 
+![Hermes Agent Desktop Nord Theme](UI.png)
+
 Arctic, north-bluish palette from [nordtheme.com](https://www.nordtheme.com).
 
 - **Light:** Snow Storm surfaces, Polar Night text, Frost `#5E81AC` accent
 - **Dark:** Polar Night surfaces, Snow Storm text, Frost `#88C0D0` accent
 - Includes matching terminal ANSI colors (Aurora + Frost)
 
-## Install on Windows (required)
+## Install on Windows
 
-Desktop plugins load from the **local** Windows HERMES_HOME, not the remote Linux gateway.
+Desktop plugins load from the **local** Windows HERMES_HOME.
 
 1. Create folder:
    ```
