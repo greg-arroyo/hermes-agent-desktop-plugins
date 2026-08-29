@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>SNES EmulatorJS local-ROM smoke test</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #111; color: #eee; font: 14px system-ui, sans-serif; }
+    header { padding: 10px 14px; display: flex; gap: 10px; align-items: center; border-bottom: 1px solid #333; }
+    #game { width: 100%; height: calc(100% - 52px); }
+    #log { position: fixed; bottom: 0; left: 0; right: 0; max-height: 30%; overflow: auto;
+           background: rgba(0,0,0,.85); font: 11px monospace; padding: 8px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+<header>
+  <strong>EmulatorJS SNES smoke test</strong>
+  <input type="file" id="rom" accept=".smc,.sfc,.fig,.zip"/>
+  <span id="status">pick a local ROM</span>
+</header>
+<div id="game"></div>
+<div id="log"></div>
+<script>
+const logEl = document.getElementById('log');
+const status = document.getElementById('status');
+function log(m) { logEl.textContent += m + '\\n'; console.log(m); }
+function setStatus(s) { status.textContent = s; }
+
+document.getElementById('rom').onchange = async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  setStatus(file.name + ' → loading CDN…');
+  log('ROM blob URL: ' + url);
+
+  // Clear previous run
+  document.getElementById('game').innerHTML = '';
+  const box = document.createElement('div');
+  box.id = 'game';
+  box.style.cssText = 'width:100%;height:calc(100% - 52px)';
+  document.body.insertBefore(box, logEl);
+
+  window.EJS_player = '#game';
+  window.EJS_core = 'snes';
+  window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
+  window.EJS_gameUrl = url;
+  window.EJS_gameName = file.name;
+  window.EJS_startOnLoaded = true;
+  window.EJS_threads = false;
+  window.EJS_disableAutoLang = true;
+  window.EJS_DEBUG_XX = true;
+  window.EJS_volume = 0.5;
+  window.EJS_defaultOptions = { 'save-state-location': 'download' };
+  window.EJS_ready = () => { log('EJS_ready'); setStatus('ready'); };
+  window.EJS_onGameStart = () => { log('EJS_onGameStart'); setStatus('playing ' + file.name); };
+
+  window.onerror = (m) => { log('ERROR ' + m); setStatus('error: ' + m); };
+
+  const s = document.createElement('script');
+  s.src = 'https://cdn.emulatorjs.org/stable/data/loader.js';
+  s.onerror = () => { log('loader failed'); setStatus('CDN loader failed'); };
+  s.onload = () => log('loader.js onload');
+  document.body.appendChild(s);
+};
+</script>
+</body>
+</html>
