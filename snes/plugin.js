@@ -1,13 +1,12 @@
 /**
  * SNES — local ROM launcher for Hermes Desktop
  *
- * Proven path: snes-smoke-test.html works in Chromium with direct embed.
- * This plugin uses the SAME contract (no iframe) on the /snes route page.
- *
- * - ROM: user file picker → blob: URL only (never uploaded / never retained by us)
+ * - ROM: user file picker → blob: URL only (never uploaded / never retained)
  * - EmulatorJS: official CDN loader, only after ROM selected
  * - Core: snes → snes9x
- * - Sidebar: "SNES" + controller pad icon
+ * - Open path: host.openWorkspace (forces a visible main-zone tab). The older
+ *   ROUTES_AREA + sidebar path alone can look like a dead click when a session
+ *   tile is focused in the main zone (#72602 class) — openWorkspace reveals.
  *
  * Windows: %LOCALAPPDATA%\hermes\desktop-plugins\snes\plugin.js
  * Ctrl+K → Reload desktop plugins
@@ -29,40 +28,58 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'snes'
 const ROUTE = '/snes'
+const WORKSPACE_ID = 'snes'
 const CDN = 'https://cdn.emulatorjs.org/stable/data/'
 const LOADER = CDN + 'loader.js'
 const CORE = 'snes'
 const EXTS = ['smc', 'sfc', 'fig', 'gd3', 'gd7', 'dx2', 'bsx', 'swc', 'zip']
 const GAME_SEL = '#hermes-snes-game'
 
-const PAD_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">' +
-  '<rect x="1.5" y="4.5" width="13" height="7" rx="2.2" fill="white"/>' +
-  '<rect x="3.6" y="7.15" width="2.4" height="0.7" fill="#000"/>' +
-  '<rect x="4.45" y="6.3" width="0.7" height="2.4" fill="#000"/>' +
-  '<rect x="7" y="8.15" width="0.85" height="0.35" rx="0.1" fill="#000"/>' +
-  '<rect x="8.1" y="8.15" width="0.85" height="0.35" rx="0.1" fill="#000"/>' +
-  '<circle cx="11.1" cy="6.55" r="0.5" fill="#000"/>' +
-  '<circle cx="10.25" cy="7.4" r="0.5" fill="#000"/>' +
-  '<circle cx="11.95" cy="7.4" r="0.5" fill="#000"/>' +
-  '<circle cx="11.1" cy="8.25" r="0.5" fill="#000"/>' +
-  '</svg>'
+/**
+ * Sidebar / empty-state gamepad — traced from user reference silhouette
+ * (wide body, left D-pad, center select/start, right face-button diamond).
+ * evenodd cutouts + currentColor so it tracks the app theme.
+ */
+const PAD_PATH =
+  'M5.5 3.2H26.5C29.4 3.2 31.5 5.3 31.5 8.2V11.8C31.5 14.7 29.4 16.8 26.5 16.8H5.5' +
+  'C2.6 16.8 0.5 14.7 0.5 11.8V8.2C0.5 5.3 2.6 3.2 5.5 3.2Z' +
+  'M8.2 6.4H10V8.2H11.8V10H10V11.8H8.2V10H6.4V8.2H8.2Z' +
+  'M14.9 9.2m-0.95 0a0.95 0.55 0 1 0 1.9 0a0.95 0.55 0 1 0-1.9 0' +
+  'M17.5 9.2m-0.95 0a0.95 0.55 0 1 0 1.9 0a0.95 0.55 0 1 0-1.9 0' +
+  'M23.4 6.15m-1.2 0a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0' +
+  'M21.0 8.55m-1.2 0a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0' +
+  'M25.8 8.55m-1.2 0a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0' +
+  'M23.4 10.95m-1.2 0a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0'
+
+const PAD_SVG_INNER =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 20" aria-hidden="true" focusable="false">' +
+  '<path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="' +
+  PAD_PATH +
+  '"/></svg>'
+
+const PAD_SVG_MASK =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 20">' +
+  '<path fill="white" fill-rule="evenodd" d="' +
+  PAD_PATH +
+  '"/></svg>'
 
 function padMask() {
   return (
     'url("data:image/svg+xml,' +
-    encodeURIComponent(PAD_SVG) +
+    encodeURIComponent(PAD_SVG_MASK) +
     '") center / contain no-repeat'
   )
 }
 
 function Pad({ size = 16, className }) {
   const s = typeof size === 'number' ? size + 'px' : size
+  // Slightly wider than tall — matches the real controller aspect.
+  const w = typeof size === 'number' ? size * 1.35 + 'px' : size
   return jsx('span', {
     'aria-hidden': true,
     className: cn('inline-block shrink-0', className),
     style: {
-      width: s,
+      width: w,
       height: s,
       backgroundColor: 'currentColor',
       WebkitMask: padMask(),
@@ -71,9 +88,13 @@ function Pad({ size = 16, className }) {
   })
 }
 
+/**
+ * Light-touch sidebar icon swap: hide the stock codicon and inject the
+ * reference gamepad. Scoped + idempotent — no full-document thrash loops.
+ */
 function installNavIcon() {
   if (typeof document === 'undefined') return () => {}
-  // Idempotent singleton — avoid stacking observers on hot reload
+
   if (window.__hermesSnesNavIcon && typeof window.__hermesSnesNavIcon.dispose === 'function') {
     try {
       window.__hermesSnesNavIcon.dispose()
@@ -85,7 +106,6 @@ function installNavIcon() {
   const st = document.createElement('style')
   st.setAttribute('data-snes-nav-icon', '1')
   st.textContent = `
-/* Collapse stock play-circle on SNES nav rows */
 [data-snes-host="1"] > i.codicon,
 [data-snes-host="1"] i.codicon {
   display: none !important;
@@ -96,50 +116,29 @@ function installNavIcon() {
   opacity: 0 !important;
   pointer-events: none !important;
 }
-[data-snes-host="1"] > i.codicon::before {
-  content: none !important;
-}
-/* Injected pad — real SVG, themes via currentColor */
 span[data-snes-pad-el="1"] {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  width: 1rem !important;
-  height: 1rem !important;
-  min-width: 1rem !important;
-  min-height: 1rem !important;
+  width: 1.05rem !important;
+  height: 0.78rem !important;
+  min-width: 1.05rem !important;
   flex-shrink: 0 !important;
   color: inherit !important;
-  opacity: 0.72 !important;
+  opacity: 0.78 !important;
   line-height: 0 !important;
 }
 span[data-snes-pad-el="1"] svg {
-  width: 1rem !important;
-  height: 1rem !important;
+  width: 1.05rem !important;
+  height: 0.78rem !important;
   display: block !important;
-  fill: currentColor !important;
 }
 `
   document.head.appendChild(st)
 
-  // Inline SVG pad (visible body + cutouts). Uses currentColor.
-  const PAD_INNER =
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
-    '<path fill="currentColor" d="M3 4.75h10a1.75 1.75 0 0 1 1.75 1.75v2.6c0 1.35-.9 2.55-2.2 3-.35.12-.72.2-1.1.2H4.55c-.38 0-.75-.08-1.1-.2C2.15 11.65 1.25 10.45 1.25 9.1V6.5A1.75 1.75 0 0 1 3 4.75z"/>' +
-    // d-pad (cut with darker via opacity path - use holes punched with composite)
-    '<path fill="#000" fill-opacity=".45" d="M4.35 7.35h2.3v.85h-.75v.75h-.8v-.75h-.75z"/>' +
-    '<path fill="#000" fill-opacity=".45" d="M7.15 8.2h.9v.4h-.9zm1.15 0h.9v.4h-.9z"/>' +
-    '<circle cx="11.05" cy="6.55" r=".48" fill="#000" fill-opacity=".45"/>' +
-    '<circle cx="10.2" cy="7.4" r=".48" fill="#000" fill-opacity=".45"/>' +
-    '<circle cx="11.9" cy="7.4" r=".48" fill="#000" fill-opacity=".45"/>' +
-    '<circle cx="11.05" cy="8.25" r=".48" fill="#000" fill-opacity=".45"/>' +
-    '</svg>'
-
   function isSnesNavButton(btn) {
     if (!btn || btn.tagName !== 'BUTTON') return false
-    // Tour hook from contributed nav
     if (btn.querySelector('[data-tour="sidebar-nav-snes:nav"], [data-tour*="snes:nav"]')) return true
-    // Label text
     const spans = btn.querySelectorAll('span')
     for (let i = 0; i < spans.length; i++) {
       const t = (spans[i].textContent || '').replace(/\s+/g, ' ').trim()
@@ -149,38 +148,16 @@ span[data-snes-pad-el="1"] svg {
     return t === 'SNES' || t.startsWith('SNES ')
   }
 
-  function findSnesButtons() {
-    const out = []
-    // Prefer explicit sidebar menu buttons
-    document.querySelectorAll('[data-slot="sidebar-menu-button"], button[data-sidebar="menu-button"], button').forEach(btn => {
-      if (isSnesNavButton(btn)) out.push(btn)
-    })
-    return out
-  }
-
   function ensurePad(btn) {
     if (!btn || !btn.isConnected) return
-    btn.setAttribute('data-snes-host', '1')
+    if (btn.getAttribute('data-snes-host') !== '1') btn.setAttribute('data-snes-host', '1')
 
-    // Hide play-circle hard
-    btn.querySelectorAll('i.codicon').forEach(icon => {
-      icon.style.setProperty('display', 'none', 'important')
-      icon.setAttribute('aria-hidden', 'true')
-    })
-
-    let pad = null
-    for (let c = btn.firstChild; c; c = c.nextSibling) {
-      if (c.nodeType === 1 && c.getAttribute && c.getAttribute('data-snes-pad-el') === '1') {
-        pad = c
-        break
-      }
-    }
+    let pad = btn.querySelector('span[data-snes-pad-el="1"]')
     if (!pad) {
       pad = document.createElement('span')
       pad.setAttribute('data-snes-pad-el', '1')
       pad.setAttribute('aria-hidden', 'true')
-      pad.innerHTML = PAD_INNER
-      // Place before the label span / after nothing
+      pad.innerHTML = PAD_SVG_INNER
       const label =
         btn.querySelector('[data-tour*="snes:nav"]') ||
         btn.querySelector('span.min-w-0') ||
@@ -188,31 +165,39 @@ span[data-snes-pad-el="1"] svg {
       if (label && label.parentNode === btn) btn.insertBefore(pad, label)
       else btn.insertBefore(pad, btn.firstChild)
     } else if (!pad.querySelector('svg')) {
-      pad.innerHTML = PAD_INNER
+      pad.innerHTML = PAD_SVG_INNER
     }
   }
 
   const tick = () => {
-    findSnesButtons().forEach(ensurePad)
+    document
+      .querySelectorAll('[data-slot="sidebar-menu-button"], button[data-sidebar="menu-button"], button')
+      .forEach(btn => {
+        if (isSnesNavButton(btn)) ensurePad(btn)
+      })
   }
 
   tick()
+  let raf = 0
   const mo = new MutationObserver(() => {
-    if (tick._raf) return
-    tick._raf = requestAnimationFrame(() => {
-      tick._raf = 0
+    if (raf) return
+    raf = requestAnimationFrame(() => {
+      raf = 0
       tick()
     })
   })
-  mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true })
-  const timers = [0, 16, 50, 100, 250, 500, 1000, 2000, 4000, 8000].map(ms => setTimeout(tick, ms))
-  const iv = setInterval(tick, 750)
+  // Observe sidebar region only when possible; fall back to body.
+  const root =
+    document.querySelector('[data-tour="sessions-sidebar"]') ||
+    document.querySelector('[data-sidebar="sidebar"]') ||
+    document.body
+  mo.observe(root, { childList: true, subtree: true })
+  const timers = [0, 50, 200, 600, 1500].map(ms => setTimeout(tick, ms))
 
   const dispose = () => {
     mo.disconnect()
-    clearInterval(iv)
     timers.forEach(clearTimeout)
-    if (tick._raf) cancelAnimationFrame(tick._raf)
+    if (raf) cancelAnimationFrame(raf)
     document.querySelectorAll('span[data-snes-pad-el="1"]').forEach(n => n.remove())
     document.querySelectorAll('[data-snes-host="1"]').forEach(n => n.removeAttribute('data-snes-host'))
     st.remove()
@@ -258,7 +243,6 @@ function hardenInstance(emu) {
     const volume = args[0]
     this.volume = volume
     this.muted = volume === 0
-    // EmulatorJS does `this.Module.AL` without optional chaining — guard it.
     if (!this.Module) return
     try {
       return inner.apply(this, args)
@@ -291,7 +275,6 @@ function hardenInstance(emu) {
   emu.__hermesHardened = true
 }
 
-/** One-time load of official loader.js (and thus emulator.min.js). */
 function loadLoaderScript() {
   return new Promise((resolve, reject) => {
     if (window.__hermesSnesLoaderOk && window.EmulatorJS) {
@@ -325,12 +308,7 @@ function loadLoaderScript() {
   })
 }
 
-/**
- * Start EmulatorJS the same way the working smoke test does:
- * set window.EJS_* then load loader.js (or new EmulatorJS if already present).
- */
 function startEmulator({ romUrl, romName, onLog, onStarted, onError }) {
-  // Clean prior instance globals that confuse re-entry
   try {
     if (window.EJS_emulator && typeof window.EJS_emulator.callEvent === 'function') {
       try {
@@ -360,7 +338,6 @@ function startEmulator({ romUrl, romName, onLog, onStarted, onError }) {
     try {
       hardenInstance(window.EJS_emulator)
       if (window.EJS_emulator && window.EJS_emulator.Module) {
-        // safe volume apply once Module exists
         const v = window.EJS_emulator.volume || 0.5
         if (typeof window.EJS_emulator.setVolume === 'function') {
           window.EJS_emulator.setVolume(v)
@@ -379,7 +356,6 @@ function startEmulator({ romUrl, romName, onLog, onStarted, onError }) {
     onStarted && onStarted()
   }
 
-  // Patch prototype before construction if class already present
   try {
     if (window.EmulatorJS && window.EmulatorJS.prototype) {
       const P = window.EmulatorJS.prototype
@@ -387,7 +363,6 @@ function startEmulator({ romUrl, romName, onLog, onStarted, onError }) {
         const bind = P.bindListeners
         P.bindListeners = function () {
           if (typeof bind === 'function') bind.apply(this, arguments)
-          // setVolume is assigned inside bindListeners — harden immediately
           hardenInstance(this)
           const self = this
           const iv = setInterval(() => {
@@ -404,7 +379,6 @@ function startEmulator({ romUrl, romName, onLog, onStarted, onError }) {
   return loadLoaderScript()
     .then(mode => {
       if (mode === 'fresh') {
-        // loader.js IIFE already did `new EmulatorJS(EJS_player, config)` using our globals.
         onLog && onLog('loader fresh — using constructed instance')
         const wait = setInterval(() => {
           if (window.EJS_emulator) {
@@ -417,7 +391,6 @@ function startEmulator({ romUrl, romName, onLog, onStarted, onError }) {
         return
       }
 
-      // Re-entry: script already on page — construct a new instance against the host node.
       if (!window.EmulatorJS) {
         onError && onError('EmulatorJS class missing after loader')
         return
@@ -477,231 +450,319 @@ function SnesPage() {
   const inputRef = useRef(null)
   const blobRef = useRef(null)
   const [meta, setMeta] = useState(null)
-    const [playing, setPlaying] = useState(false)
-    const [error, setError] = useState(null)
-    // bump to force a clean game host node
-    const [mountId, setMountId] = useState(0)
+  const [playing, setPlaying] = useState(false)
+  const [error, setError] = useState(null)
+  const [mountId, setMountId] = useState(0)
 
-    const revoke = useCallback(() => {
-      if (blobRef.current) {
-        try {
-          URL.revokeObjectURL(blobRef.current)
-        } catch (e) {}
-        blobRef.current = null
-      }
-    }, [])
+  const revoke = useCallback(() => {
+    if (blobRef.current) {
+      try {
+        URL.revokeObjectURL(blobRef.current)
+      } catch (e) {}
+      blobRef.current = null
+    }
+  }, [])
 
-    const eject = useCallback(() => {
+  const eject = useCallback(() => {
+    stopEmulator()
+    revoke()
+    setMeta(null)
+    setPlaying(false)
+    setError(null)
+    setMountId(m => m + 1)
+    if (inputRef.current) inputRef.current.value = ''
+    host.notify({ kind: 'info', message: 'ROM ejected — blob revoked, emulator stopped.' })
+  }, [revoke])
+
+  useEffect(() => {
+    return () => {
       stopEmulator()
       revoke()
-      setMeta(null)
-      setPlaying(false)
-      setError(null)
-      setMountId(m => m + 1)
-      if (inputRef.current) inputRef.current.value = ''
-      host.notify({ kind: 'info', message: 'ROM ejected — blob revoked, emulator stopped.' })
-    }, [revoke])
+    }
+  }, [revoke])
 
-    useEffect(() => {
-      return () => {
-        stopEmulator()
-        revoke()
-      }
-    }, [revoke])
+  useEffect(() => {
+    const onErr = ev => {
+      const m = String((ev && ev.message) || '')
+      if (!m) return
+      if (/reading 'AL'/.test(m)) return
+      if (/snes|EJS|Emulator|wasm|Module/i.test(m)) setError(m)
+    }
+    window.addEventListener('error', onErr)
+    return () => window.removeEventListener('error', onErr)
+  }, [])
 
-    // Keep nav pad alive (React may wipe injected nodes on layout churn)
-    useEffect(() => {
-      if (window.__hermesSnesNavIcon && typeof window.__hermesSnesNavIcon.tick === 'function') {
-        window.__hermesSnesNavIcon.tick()
-      } else {
-        installNavIcon()
-      }
-      const t = setTimeout(() => {
-        if (window.__hermesSnesNavIcon && window.__hermesSnesNavIcon.tick) {
-          window.__hermesSnesNavIcon.tick()
-        }
-      }, 200)
-      return () => clearTimeout(t)
-    }, [])
-
-    // Surface real emulator failures only (not noisy AL race notes)
-    useEffect(() => {
-      const onErr = ev => {
-        const m = String((ev && ev.message) || '')
-        if (!m) return
-        if (/reading 'AL'/.test(m)) return
-        if (/snes|EJS|Emulator|wasm|Module/i.test(m)) setError(m)
-      }
-      window.addEventListener('error', onErr)
-      return () => window.removeEventListener('error', onErr)
-    }, [])
-
-    const onFile = useCallback(
-      async e => {
-        const file = e.target.files && e.target.files[0]
-        if (!file) return
-        if (!isRom(file)) {
-          setError('Need a SNES ROM (' + EXTS.map(x => '.' + x).join(', ') + ')')
-          if (inputRef.current) inputRef.current.value = ''
-          return
-        }
-
-        stopEmulator()
-        revoke()
-
-        const url = URL.createObjectURL(file)
-        blobRef.current = url
-        setMeta({ name: file.name, size: file.size })
-        setError(null)
-        setPlaying(true)
-        setMountId(m => m + 1)
-        haptic('tap')
+  const onFile = useCallback(
+    async e => {
+      const file = e.target.files && e.target.files[0]
+      if (!file) return
+      if (!isRom(file)) {
+        setError('Need a SNES ROM (' + EXTS.map(x => '.' + x).join(', ') + ')')
         if (inputRef.current) inputRef.current.value = ''
+        return
+      }
 
-        // Wait a tick so React mounts #hermes-snes-game
-        await new Promise(r => setTimeout(r, 30))
+      stopEmulator()
+      revoke()
 
-        const hostEl = document.querySelector(GAME_SEL)
-        if (!hostEl) {
-          setError('Game host element missing')
-          return
-        }
+      const url = URL.createObjectURL(file)
+      blobRef.current = url
+      setMeta({ name: file.name, size: file.size })
+      setError(null)
+      setPlaying(true)
+      setMountId(m => m + 1)
+      haptic('tap')
+      if (inputRef.current) inputRef.current.value = ''
 
-        startEmulator({
-          romUrl: url,
-          romName: file.name,
-          onLog: () => {},
-          onStarted: () => setError(null),
-          onError: msg => setError(msg)
-        })
-      },
-      [revoke]
-    )
+      await new Promise(r => setTimeout(r, 30))
 
-    return jsxs('div', {
-      className: 'flex h-full min-h-0 flex-col',
-      children: [
-        jsxs('div', {
-          className:
-            'flex shrink-0 flex-wrap items-center gap-2 border-b border-(--ui-stroke-secondary) px-3 py-2',
-          children: [
-            jsxs('div', {
-              className: 'flex min-w-0 flex-1 items-center gap-2',
-              children: [
-                jsx(Pad, { size: 16, className: 'text-(--ui-text-tertiary)' }),
-                jsx('div', {
-                  className: 'truncate text-sm font-medium',
-                  children: meta ? meta.name : 'SNES'
-                }),
-                meta
-                  ? jsx('span', {
-                      className: 'text-xs text-(--ui-text-quaternary)',
-                      children: fmt(meta.size)
-                    })
-                  : null
-              ]
-            }),
-            jsx('input', {
-              ref: inputRef,
-              type: 'file',
-              accept: EXTS.map(x => '.' + x).join(','),
-              className: 'hidden',
-              onChange: onFile
-            }),
-            jsx(Button, {
-              type: 'button',
-              size: 'sm',
-              variant: 'secondary',
-              onClick: () => {
-                haptic('tap')
-                inputRef.current && inputRef.current.click()
-              },
-              children: meta ? 'Choose another' : 'Choose ROM'
-            }),
-            meta
-              ? jsx(Tip, {
-                  label: 'Stop emulator and forget ROM blob',
-                  children: jsx(Button, {
-                    type: 'button',
-                    size: 'sm',
-                    variant: 'ghost',
-                    onClick: () => {
-                      haptic('tap')
-                      eject()
-                    },
-                    children: 'Eject'
+      const hostEl = document.querySelector(GAME_SEL)
+      if (!hostEl) {
+        setError('Game host element missing')
+        return
+      }
+
+      startEmulator({
+        romUrl: url,
+        romName: file.name,
+        onLog: () => {},
+        onStarted: () => setError(null),
+        onError: msg => setError(msg)
+      })
+    },
+    [revoke]
+  )
+
+  return jsxs('div', {
+    className: 'flex h-full min-h-0 flex-col',
+    children: [
+      jsxs('div', {
+        className: 'flex shrink-0 flex-wrap items-center gap-2 border-b border-(--ui-stroke-secondary) px-3 py-2',
+        children: [
+          jsxs('div', {
+            className: 'flex min-w-0 flex-1 items-center gap-2',
+            children: [
+              jsx(Pad, { size: 16, className: 'text-(--ui-text-tertiary)' }),
+              jsx('div', {
+                className: 'truncate text-sm font-medium',
+                children: meta ? meta.name : 'SNES'
+              }),
+              meta
+                ? jsx('span', {
+                    className: 'text-xs text-(--ui-text-quaternary)',
+                    children: fmt(meta.size)
                   })
-                })
-              : null
-          ]
-        }),
-
-        error
-          ? jsx('div', {
-              className:
-                'shrink-0 border-b border-(--ui-stroke-secondary) px-3 py-2 text-xs text-(--ui-text-secondary) whitespace-pre-wrap',
-              children: error
-            })
-          : null,
-
-        playing
-          ? // EmulatorJS owns this node (clears innerHTML). Keep it empty for React.
-            jsx('div', {
-              key: mountId,
-              id: 'hermes-snes-game',
-              className: 'min-h-0 w-full flex-1 bg-black',
-              suppressHydrationWarning: true
-            })
-          : jsxs('div', {
-              className:
-                'flex min-h-0 flex-1 flex-col items-center justify-center gap-4 p-6',
-              children: [
-                jsx(Pad, { size: 48, className: 'text-(--ui-text-quaternary)' }),
-                jsx(EmptyState, {
-                  title: 'Local SNES ROM',
-                  description:
-                    'Pick a local .sfc / .smc. EmulatorJS snes9x loads from the official CDN only after you choose a file. Nothing is uploaded.'
-                }),
-                jsx(Button, {
+                : null
+            ]
+          }),
+          jsx('input', {
+            ref: inputRef,
+            type: 'file',
+            accept: EXTS.map(x => '.' + x).join(','),
+            className: 'hidden',
+            onChange: onFile
+          }),
+          jsx(Button, {
+            type: 'button',
+            size: 'sm',
+            variant: 'secondary',
+            onClick: () => {
+              haptic('tap')
+              inputRef.current && inputRef.current.click()
+            },
+            children: meta ? 'Choose another' : 'Choose ROM'
+          }),
+          meta
+            ? jsx(Tip, {
+                label: 'Stop emulator and forget ROM blob',
+                children: jsx(Button, {
                   type: 'button',
+                  size: 'sm',
+                  variant: 'ghost',
                   onClick: () => {
                     haptic('tap')
-                    inputRef.current && inputRef.current.click()
+                    eject()
                   },
-                  children: jsxs('span', {
-                    className: 'inline-flex items-center gap-2',
-                    children: [jsx(Pad, { size: 14 }), 'Choose local ROM']
-                  })
-                }),
-                jsx(Separator, { className: 'w-56 max-w-full' }),
-                jsxs('ul', {
-                  className: cn(
-                    'max-w-md list-disc space-y-1 pl-5 text-xs text-(--ui-text-quaternary)'
-                  ),
-                  children: [
-                    jsx('li', { children: 'Core: snes → snes9x @ cdn.emulatorjs.org/stable' }),
-                    jsx('li', {
-                      children: 'Extensions: ' + EXTS.map(x => '.' + x).join(' ')
-                    })
-                  ]
+                  children: 'Eject'
                 })
-              ]
-            })
-      ]
+              })
+            : null
+        ]
+      }),
+
+      error
+        ? jsx('div', {
+            className:
+              'shrink-0 border-b border-(--ui-stroke-secondary) px-3 py-2 text-xs text-(--ui-text-secondary) whitespace-pre-wrap',
+            children: error
+          })
+        : null,
+
+      playing
+        ? jsx('div', {
+            key: mountId,
+            id: 'hermes-snes-game',
+            className: 'min-h-0 w-full flex-1 bg-black',
+            suppressHydrationWarning: true
+          })
+        : jsxs('div', {
+            className: 'flex min-h-0 flex-1 flex-col items-center justify-center gap-4 p-6',
+            children: [
+              jsx(Pad, { size: 48, className: 'text-(--ui-text-quaternary)' }),
+              jsx(EmptyState, {
+                title: 'Local SNES ROM',
+                description:
+                  'Pick a local .sfc / .smc. EmulatorJS snes9x loads from the official CDN only after you choose a file. Nothing is uploaded.'
+              }),
+              jsx(Button, {
+                type: 'button',
+                onClick: () => {
+                  haptic('tap')
+                  inputRef.current && inputRef.current.click()
+                },
+                children: jsxs('span', {
+                  className: 'inline-flex items-center gap-2',
+                  children: [jsx(Pad, { size: 14 }), 'Choose local ROM']
+                })
+              }),
+              jsx(Separator, { className: 'w-56 max-w-full' }),
+              jsxs('ul', {
+                className: cn('max-w-md list-disc space-y-1 pl-5 text-xs text-(--ui-text-quaternary)'),
+                children: [
+                  jsx('li', { children: 'Core: snes → snes9x @ cdn.emulatorjs.org/stable' }),
+                  jsx('li', {
+                    children: 'Extensions: ' + EXTS.map(x => '.' + x).join(' ')
+                  })
+                ]
+              })
+            ]
+          })
+    ]
+  })
+}
+
+/** Keep hash / path checks aligned with HashRouter (#/snes). */
+function isSnesHash() {
+  try {
+    const h = String(window.location.hash || '')
+    const path = h.startsWith('#') ? h.slice(1) : h
+    return path === ROUTE || path.startsWith(ROUTE + '?') || path.startsWith(ROUTE + '/')
+  } catch (e) {
+    return false
+  }
+}
+
+/**
+ * Open SNES as a main-zone workspace tab (preferred) so a focused session tile
+ * cannot swallow the navigation. Falls back to hash route on older desktops.
+ */
+function createOpenSnes() {
+  let closeWorkspace = null
+  let opening = false
+
+  const open = () => {
+    if (opening) return
+    opening = true
+    try {
+      haptic('tap')
+    } catch (e) {}
+
+    try {
+      if (typeof host.openWorkspace === 'function') {
+        // Re-open same id refreshes + re-fronts (no duplicate tab).
+        closeWorkspace = host.openWorkspace(WORKSPACE_ID, {
+          title: 'SNES',
+          minWidth: '28rem',
+          headerVeto: true,
+          render: () => jsx(SnesPage, {}),
+          onClose: () => {
+            closeWorkspace = null
+            stopEmulator()
+          }
+        })
+        // Keep the contributed route in sync so sidebar active state lights up.
+        try {
+          if (!isSnesHash()) host.navigate(ROUTE)
+        } catch (e) {}
+        return
+      }
+
+      host.navigate(ROUTE)
+    } catch (e) {
+      console.error('[snes] open failed', e)
+      try {
+        host.notifyError(e, 'SNES failed to open')
+      } catch (err) {}
+    } finally {
+      // Allow a later re-click to re-front.
+      setTimeout(() => {
+        opening = false
+      }, 50)
+    }
+  }
+
+  const dispose = () => {
+    try {
+      if (typeof closeWorkspace === 'function') closeWorkspace()
+    } catch (e) {}
+    closeWorkspace = null
+    stopEmulator()
+  }
+
+  return { open, dispose }
+}
+
+/** When the host sidebar navigates to /snes (path-only), also force openWorkspace. */
+function watchSnesRoute(open) {
+  let last = ''
+  const tick = () => {
+    const on = isSnesHash()
+    const key = on ? 'on' : 'off'
+    if (key === last) return
+    last = key
+    if (on) open()
+  }
+  tick()
+  window.addEventListener('hashchange', tick)
+  window.addEventListener('popstate', tick)
+  // Sidebar navigate may set hash without a hashchange in some shells.
+  const iv = setInterval(tick, 400)
+  return () => {
+    window.removeEventListener('hashchange', tick)
+    window.removeEventListener('popstate', tick)
+    clearInterval(iv)
+  }
+}
+
+/** Thin route body: if someone lands on /snes without openWorkspace, show page + open tab. */
+function SnesRouteBridge({ open }) {
+  useEffect(() => {
+    open()
+  }, [open])
+  // openWorkspace hosts the real UI; keep a lightweight fallback if it is missing.
+  if (typeof host.openWorkspace === 'function') {
+    return jsx('div', {
+      className: 'grid h-full place-items-center p-6 text-sm text-(--ui-text-tertiary)',
+      children: 'Opening SNES…'
     })
   }
+  return jsx(SnesPage, {})
+}
 
 export default {
   id: ID,
   name: 'SNES',
-  description:
-    'Local SNES ROMs via EmulatorJS snes9x. CDN after pick; ROM never leaves this PC.',
+  description: 'Local SNES ROMs via EmulatorJS snes9x. CDN after pick; ROM never leaves this PC.',
   register(ctx) {
-    const stop = installNavIcon()
+    const { open, dispose: disposeOpen } = createOpenSnes()
+    const stopWatch = watchSnesRoute(open)
+    const stopIcon = installNavIcon()
+
     if (typeof ctx.onDispose === 'function') {
       ctx.onDispose(() => {
-        stop()
-        stopEmulator()
+        stopWatch()
+        stopIcon()
+        disposeOpen()
       })
     }
 
@@ -711,8 +772,9 @@ export default {
       {
         id: 'page',
         area: ROUTES_AREA,
+        title: 'SNES',
         data: { path: ROUTE },
-        render: () => jsx(SnesPage, {})
+        render: () => jsx(SnesRouteBridge, { open })
       },
       {
         id: 'nav',
@@ -726,10 +788,13 @@ export default {
         data: {
           id: 'snes.open',
           label: 'Open SNES',
-          keywords: ['snes', 'rom', 'emulator', 'snes9x'],
-          run: () => host.navigate(ROUTE)
+          keywords: ['snes', 'rom', 'emulator', 'snes9x', 'game'],
+          run: () => open()
         }
       }
     ])
+
+    // Cold start already on #/snes
+    if (isSnesHash()) open()
   }
 }
