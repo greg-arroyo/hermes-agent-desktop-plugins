@@ -16,7 +16,7 @@ It is a single JavaScript file. There is no server, no account and no telemetry:
 - **Close as completed / not planned / duplicate** (the duplicate target is recorded on GitHub), and **reopen**.
 - **Delete issue** — permanent, and it takes the issue's sub-issues with it (you must type the issue number to confirm when there are any).
 - **Pinned issues** — uses GitHub's own pins (up to 3 per repository, shared with github.com). Pinned issues show as cards above the search box; clicking a card shows just that issue, expanded, and **Show all issues** puts everything back as it was.
-- **Settings** — repository, token, "include sub-issues in the lists", "collapse sub-issues by default", and issues per page.
+- **Settings** — repository, token, "include sub-issues in the lists", "collapse sub-issues by default", issues per page, and an optional **docked right-side panel** (see [Docked panel](#docked-panel)).
 
 ## Requirements
 
@@ -66,13 +66,35 @@ Some actions go through GitHub's GraphQL API and need more rights on the reposit
 2. Paste both and press **Verify & save** (later edits in Settings use **Save**). The plugin checks them against GitHub first and saves nothing if GitHub rejects them.
 3. To change the repository, the token or the display options later, use the **gear** icon at the top right. The **circular arrows** reload everything.
 
+## Docked panel
+
+By default the plugin lives in the left navigation and opens in the main area. If you would rather have it always at hand, turn on a persistent panel:
+
+1. Open **Issue Orchestration → Settings (gear)**.
+2. Under **Docked panel**, tick **Keep Issue Orchestration docked in a right-side panel** and press **Save**.
+
+What that does:
+
+- The panel appears immediately, and is registered again every time Hermes Desktop starts, so it is there from the moment the app opens. The option is **off by default**.
+- It is the same page as the main-area view (same repository, token and display settings), with a slimmer left margin. Saving Settings in one view makes the other re-read them.
+- It has no Close button. Closing a plugin's only pane would disable the whole plugin, so you remove the panel by **unticking the option and saving**. Unticking removes it at once, with no reload.
+- The option is not shown on first-time setup, only once a repository and token are saved.
+
+**Moving it.** Desktop lets you drag any panel to a different edge (left, right, top, bottom) or stack it with another one, and it remembers the layout. The drag handle is the panel's **tab**, and Desktop hides the tab strip when a zone holds a single panel. If you cannot see a handle, use any of these:
+
+- **Settings → Appearance → Tab Strip → Always** (recommended);
+- **Ctrl+Alt+T** (*Toggle tabs*), or right-click the panel's zone and choose **Show tabs**;
+- stack another panel (Files, Review) into the same zone so the strip appears.
+
+The plugin only chooses the *first* placement (right-hand side, 420 px wide); after that the position is yours, and Desktop's **Reset layout** returns everything to the defaults. Where the panel was last placed, and whether it survives a restart, is handled by Desktop's own layout storage, not by this plugin.
+
 ## Security and privacy — please read
 
 - The token is saved **in plaintext in Hermes Desktop's local plugin storage on your PC**. It is not encrypted. Anyone who can use your Windows profile, and any other Desktop plugin you enable, could read it. Only run plugins you trust (and read this one — it is one file).
 - It is sent **only to `https://api.github.com`**, over HTTPS, with each request. It is never sent to the Hermes host, an agent, or anywhere else. The plugin makes no other network requests and has no analytics. (Clicking an issue's link icon, or a link inside a description, opens that address in your normal browser — that is your click, not the plugin phoning anywhere.)
 - **Remove saved token** (in Settings) clears the token from your PC but does **not** revoke it. If a PC is lost or a token may have leaked, revoke it at <https://github.com/settings/personal-access-tokens>.
 - Do not paste the token into chats, issues or screenshots.
-- Everything you see (issues, labels, pins) is read live from GitHub; the plugin stores only the repository name, the token and your display settings.
+- Everything you see (issues, labels, pins) is read live from GitHub; the plugin stores only the repository name, the token and your display settings (including whether the docked panel is on).
 
 ## Using it
 
@@ -107,6 +129,9 @@ Some actions go through GitHub's GraphQL API and need more rights on the reposit
 | "GitHub rate limit reached" | Wait a few minutes (search is limited to 30 requests a minute). |
 | Pinning, un-pinning or deleting is refused | GitHub decided you lack rights on that repository; the message says why. |
 | A blank page after an update | Press **Ctrl+K → Reload desktop plugins**. |
+| The docked panel is on but I do not see it | It stacks with the other right-hand panels (Files, Review) on first appearance. Open or expand the right-hand zone, or use **Reset layout**. |
+| The docked panel has no drag handle | Desktop hides the tab strip for a lone panel. Set **Settings → Appearance → Tab Strip → Always**, or press **Ctrl+Alt+T**. |
+| I cannot close the docked panel | By design. Untick the option under **Settings → Docked panel** and Save. |
 
 ## Verify your download
 
@@ -120,7 +145,7 @@ The result must equal the value in `plugin.js.sha256`.
 
 ## Uninstall
 
-1. In the plugin, open Settings and click **Remove saved token** (so no token stays in the app's storage).
+1. In the plugin, open Settings, untick **Docked panel** if it is on (then Save), and click **Remove saved token** (so no token stays in the app's storage).
 2. Delete the `github-issues` folder from `%LOCALAPPDATA%\hermes\desktop-plugins\`.
 3. **Ctrl+K → Reload desktop plugins**.
 4. Revoke the token on GitHub if you no longer need it.
