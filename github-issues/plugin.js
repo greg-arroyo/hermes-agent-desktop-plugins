@@ -44,7 +44,6 @@ const STORE_SUBFILTER = 'subFilter'
 const STORE_INCLUDE_SUB = 'prefIncludeSub'
 const STORE_COLLAPSE_SUBS = 'prefCollapseSubs'
 const STORE_PAGE_SIZE = 'prefPageSize'
-const STORE_DOCK = 'prefDockPanel'
 const DEFAULT_PAGE_SIZE = 10
 const MAX_PAGE_SIZE = 100 // GitHub's per-page limit
 const API = 'https://api.github.com'
@@ -62,18 +61,17 @@ function parsePageSize(v) {
   return n >= 1 && n <= MAX_PAGE_SIZE ? n : null
 }
 
-/** User preferences (Settings). The two list checkboxes default to TRUE, the page size to 10 and the docked right-side panel to OFF until the user changes them. */
+/** User preferences (Settings). The two checkboxes default to TRUE and the page size to 10 until the user changes them. */
 function readPrefs() {
   const on = k => !CTX || CTX.storage.get(k, true) !== false
   const size = CTX ? parsePageSize(CTX.storage.get(STORE_PAGE_SIZE, DEFAULT_PAGE_SIZE)) : null
-  return { includeSub: on(STORE_INCLUDE_SUB), collapseSubs: on(STORE_COLLAPSE_SUBS), pageSize: size || DEFAULT_PAGE_SIZE, dock: !!CTX && CTX.storage.get(STORE_DOCK, false) === true }
+  return { includeSub: on(STORE_INCLUDE_SUB), collapseSubs: on(STORE_COLLAPSE_SUBS), pageSize: size || DEFAULT_PAGE_SIZE }
 }
 
 function writePrefs(prefs) {
   CTX.storage.set(STORE_INCLUDE_SUB, !!prefs.includeSub)
   CTX.storage.set(STORE_COLLAPSE_SUBS, !!prefs.collapseSubs)
   CTX.storage.set(STORE_PAGE_SIZE, parsePageSize(prefs.pageSize) || DEFAULT_PAGE_SIZE)
-  CTX.storage.set(STORE_DOCK, !!prefs.dock)
 }
 
 /** owner/name, https://github.com/owner/name(.git)(/…), git@github.com:owner/name.git */
@@ -1268,7 +1266,6 @@ function QuietButton(props) {
 }
 
 function SetupScreen({ first, header, initialRepo, hasToken, onSaved, onCancel, onTokenRemoved }) {
-  const leftMargin = useLeftMargin()
   const [repoIn, setRepoIn] = useState(initialRepo || '')
   const [tokenIn, setTokenIn] = useState('')
   const [show, setShow] = useState(false)
@@ -1309,7 +1306,6 @@ function SetupScreen({ first, header, initialRepo, hasToken, onSaved, onCancel, 
       CTX.storage.set(STORE_REPO, repo)
       if (typed) CTX.storage.set(STORE_TOKEN, typed)
       writePrefs({ ...pref, pageSize: parsePageSize(pageSizeIn) })
-      bumpSync() // other mounted views (tab + docked panel) re-read; the dock registration follows the setting
       setTokenIn('')
       haptic('tap')
       onSaved({ repo, hasToken: true }, info.warning)
@@ -1324,7 +1320,7 @@ function SetupScreen({ first, header, initialRepo, hasToken, onSaved, onCancel, 
   // shared header on top (it never moves), and only the content below it scrolls. First-time setup keeps its own plain layout.
   return jsxs('div', {
     className: first ? 'h-full overflow-y-auto' : 'flex h-full min-h-0 flex-col',
-    style: first ? undefined : { paddingLeft: leftMargin },
+    style: first ? undefined : { paddingLeft: LEFT_MARGIN },
     children: [
       first ? null : header,
       jsx('div', {
@@ -1332,7 +1328,7 @@ function SetupScreen({ first, header, initialRepo, hasToken, onSaved, onCancel, 
         children: jsxs('div', {
       // Full width (no centred max-width column): the page's left margin (clear of the nav) and the 1rem right margin the issue lists use.
       className: first ? 'space-y-4 py-5 pr-4' : 'space-y-4 pb-5 pr-4 pt-4',
-      style: first ? { paddingLeft: leftMargin } : undefined,
+      style: first ? { paddingLeft: LEFT_MARGIN } : undefined,
       children: [
         first
           ? jsxs('div', {
@@ -1453,23 +1449,6 @@ function SetupScreen({ first, header, initialRepo, hasToken, onSaved, onCancel, 
             })
           : null,
 
-        // Docked panel (Settings only).
-        !first
-          ? jsxs('div', {
-              className: 'space-y-2',
-              children: [
-                jsx('div', { className: 'text-xs font-medium text-(--ui-text-secondary)', children: 'Docked panel' }),
-                PrefCheckbox({
-                  id: 'gi-pref-dock',
-                  checked: pref.dock,
-                  onChange: v => setPref(p => ({ ...p, dock: v })),
-                  label: 'Keep Issue Orchestration docked in a right-side panel',
-                  hint: 'Checked: the panel is always there on the right, from the moment Desktop starts. Unchecked: it is removed. It cannot be closed from its tab while on — turn this off to remove it. Takes effect when you click Save.'
-                })
-              ]
-            })
-          : null,
-
         error ? jsx('div', { role: 'alert', className: 'whitespace-pre-wrap text-xs text-(--ui-red)', children: error }) : null,
 
         jsxs('div', {
@@ -1495,7 +1474,6 @@ function SetupScreen({ first, header, initialRepo, hasToken, onSaved, onCancel, 
                       size: 'sm',
                       onClick: () => {
                         CTX.storage.remove(STORE_TOKEN)
-                        bumpSync()
                         onTokenRemoved()
                       },
                       children: 'Remove'
@@ -2227,10 +2205,6 @@ const RIGHT_MARGIN = '1rem'
 // The left margin of the whole page: the gap between the Desktop's left nav and everything we draw. The pane host adds none of its own, so
 // without this the page sits against the nav. 2.25rem (36px) matches the gap the chat pane keeps beside the nav (its message boxes start 36px in).
 const LEFT_MARGIN = '2.25rem'
-// In the docked right-side panel the page is not beside the Desktop nav, so it drops the 36px nav-clearance margin for a slim one.
-const DOCKED_MARGIN = '0.75rem'
-const DockContext = createContext(false)
-const useLeftMargin = () => (useContext(DockContext) ? DOCKED_MARGIN : LEFT_MARGIN)
 const SUB_ROW_HOVER_BG = 'color-mix(in srgb, var(--foreground, currentColor) 5%, transparent)'
 
 /** One sub-issue: state icon, title, link icon … trash on the far right (two-step remove). */
@@ -3806,7 +3780,6 @@ function SearchBar({ value, prefix, onChange, onSubmit, onReset }) {
 }
 
 function MainView({ repo, includeSub, collapseSubs, pageSize, onSettings, onAuthProblem, notice, clearNotice }) {
-  const leftMargin = useLeftMargin()
   const [info, setInfo] = useState(() => INFO_CACHE.get(repo) || null)
   const [infoError, setInfoError] = useState(null)
   const [labels, setLabels] = useState([])
@@ -4062,7 +4035,7 @@ function MainView({ repo, includeSub, collapseSubs, pageSize, onSettings, onAuth
     children: jsxs('div', {
     className: 'flex h-full min-h-0 flex-col',
     // One left margin for the entire list view (notices, title, repo line, search, Open/Closed bar, rows, skeleton): they all share this edge.
-    style: { paddingLeft: leftMargin },
+    style: { paddingLeft: LEFT_MARGIN },
     children: [
       notice
         ? jsxs('div', {
@@ -4171,15 +4144,6 @@ function GithubIssuesPageInner() {
   const complete = !!(cfg.repo && cfg.hasToken)
   const openSettings = useCallback(() => setEditing(true), [])
 
-  // The tab and the docked panel are separate mounts of this page: when either saves, the other re-reads the shared storage.
-  const sync = useValue(SYNC)
-  useEffect(() => {
-    if (!sync) return
-    setCfg(read())
-    setPrefs(readPrefs())
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sync])
-
   if (!complete || editing) {
     return jsx(SetupScreen, {
       first: !complete,
@@ -4240,15 +4204,6 @@ function isRouteHash() {
 // ---------------------------------------------------------------------------------------------------------------
 
 const PANE_ID = 'plugin-workspace:' + WORKSPACE_ID
-
-// Bumped whenever Settings saves (or the token is removed): mounted views re-read storage, and the dock registration follows the setting.
-const SYNC = atom(0)
-function bumpSync() {
-  SYNC.set(SYNC.get() + 1)
-}
-
-// The docked right-side panel: the same page, mounted in a 'right' pane. Stable render function (the host mounts it as a component type).
-const renderDock = () => jsx(DockContext.Provider, { value: true, children: jsx(GithubIssuesPage, {}) })
 const NEVER_VISIBLE = atom(false)
 const OPEN_RETRY_MS = [0, 250, 700, 1400, 2500, 4000]
 const INLINE_AFTER_MS = 1800
@@ -4383,42 +4338,43 @@ export default {
 
     // Sidebar path-only navigation → also front the workspace tab. Only the OFF→ON transition opens it: a tab the
     // user closed while staying on the route is not re-opened behind their back.
+    // The sidebar row / palette navigate to ROUTE, and a contributed route renders as a full page INSIDE the
+    // workspace pane — the same pane that holds the user's chat tab. If we left the router there, re-focusing that
+    // chat tab would still show this page (the chat looks like it vanished). So remember the last non-route
+    // location and, once our own tab is really on screen, put the router back there.
     let last = ''
+    let lastOff = ''
+    let restore = false
     const tick = () => {
-      const on = isRouteHash() ? 'on' : 'off'
-      if (on === last) return
-      last = on
-      if (on === 'on') open()
+      const onRoute = isRouteHash()
+      if (!onRoute) {
+        try {
+          lastOff = String(window.location.hash || '').replace(/^#/, '')
+        } catch (e) {}
+        restore = false
+      }
+      const on = onRoute ? 'on' : 'off'
+      if (on !== last) {
+        last = on
+        if (on === 'on') {
+          restore = true
+          open()
+        }
+      }
+      if (restore && onRoute && paneShown()) {
+        restore = false
+        try {
+          if (lastOff) {
+            host.navigate(lastOff)
+            // Returning to a chat route may front the chat pane; keep our tab the one in view.
+            if (typeof host.revealPane === 'function') setTimeout(() => host.revealPane(PANE_ID), 60)
+          }
+        } catch (e) {}
+      }
     }
     tick() // also covers a cold start already on the route; the route page keeps retrying if the layout is not ready yet
     ctx.addEventListener(window, 'hashchange', tick)
     ctx.setInterval(tick, 400)
-
-    // Persistent dock: while the Settings option is on, a right-side pane is registered on every plugin load (so it is there at Desktop
-    // start); turning it off disposes the registration. uncloseable: closing a plugin's only pane would disable the whole plugin.
-    let disposeDock = null
-    const syncDock = () => {
-      const want = readPrefs().dock
-      if (want && !disposeDock) {
-        disposeDock = ctx.register({
-          id: 'dock',
-          area: 'panes',
-          title: 'Issue Orchestration',
-          data: { placement: 'right', width: '420px', uncloseable: true },
-          render: renderDock
-        })
-      } else if (!want && disposeDock) {
-        disposeDock()
-        disposeDock = null
-      }
-    }
-    syncDock()
-    const stopSync = SYNC.listen(syncDock)
-    ctx.onDispose(() => {
-      stopSync()
-      if (disposeDock) disposeDock()
-      disposeDock = null
-    })
 
     ctx.registerMany([
       { id: 'page', area: ROUTES_AREA, title: 'Issue Orchestration', data: { path: ROUTE }, render: () => jsx(RouteBridge, { open }) },
