@@ -831,6 +831,8 @@ const OPEN_SUB = new Map()
 // by hand. A section nobody toggled follows the Settings default.
 const ROW_OPEN = new Set()
 const SECTION_COLLAPSED = new Map()
+// Comments sections the user expanded ("repo#n"). Collapsed by default; remembered per issue for the session.
+const COMMENTS_OPEN = new Set()
 const RECENT = new Map()
 const RECENT_MS = 8000
 
@@ -962,6 +964,51 @@ function labelStyle(color, mode) {
     color: 'rgb(' + t[0] + ',' + t[1] + ',' + t[2] + ')',
     borderColor: 'rgba(' + r + ',' + g + ',' + b + ',0.4)'
   }
+}
+// ---- Comments (read-only). Specialists post as one shared token user, so each comment starts with a **[role · @handle]** prefix;
+// it is parsed here so the UI can show the role/handle instead of the generic author.
+const COMMENT_PREFIX_RE = /^\s*\*\*\[\s*([^\]\n·]+?)\s*·\s*@?([A-Za-z0-9_.-]+)\s*\]\*\*[ \t]*\r?\n?/
+
+/** Split a comment into { role, handle, text }. role/handle are null when the comment has no prefix. */
+function parseCommentPrefix(body) {
+  const src = String(body || '')
+  const m = COMMENT_PREFIX_RE.exec(src)
+  if (!m) return { role: null, handle: null, text: src.trim() }
+  return { role: m[1].trim(), handle: m[2], text: src.slice(m[0].length).replace(/^\s+/, '') }
+}
+
+/** 'approved' | 'changes' | 'evidence' | null — what kind of gate comment this is (looked for near the top of the text). */
+function classifyComment(text) {
+  const head = String(text || '').slice(0, 240)
+  if (/\bCHANGES[ _-]REQUIRED\b/i.test(head)) return 'changes'
+  if (/\bAPPROVED\b/.test(head)) return 'approved'
+  if (/\bevidence\b/i.test(String(text || '').slice(0, 120))) return 'evidence'
+  return null
+}
+
+/** All comments of an issue, oldest first (REST, 100 per page, up to 5 pages). */
+async function listComments(repo, number) {
+  const out = []
+  for (let page = 1; page <= 5; page++) {
+    const r = await gh('GET', '/repos/' + repo + '/issues/' + number + '/comments', { query: { per_page: 100, page } })
+    const rows = r.data || []
+    for (const c of rows) {
+      const p = parseCommentPrefix(c.body)
+      out.push({
+        id: c.id,
+        author: (c.user && c.user.login) || '',
+        created_at: c.created_at,
+        updated_at: c.updated_at,
+        url: c.html_url,
+        role: p.role,
+        handle: p.handle,
+        text: p.text,
+        kind: classifyComment(p.text)
+      })
+    }
+    if (rows.length < 100) break
+  }
+  return out
 }
 // ===== CORE END =====
 
@@ -2781,6 +2828,158 @@ function SubIssueRows({ repo, parent, subs, subError, canCreate, labels, done, t
   })
 }
 
+const KIND_STYLE = {
+  approved: { label: 'APPROVED', color: 'var(--ui-green, #3fb950)' },
+  changes: { label: 'CHANGES REQUIRED', color: 'var(--ui-red, #f85149)' },
+  evidence: { label: 'EVIDENCE', color: 'var(--ui-accent)' }
+}
+const COMMENT_CLIP_REM = 14
+
+function CommentCard({ c, last }) {
+  const [more, setMore] = useState(false)
+  const long = c.text.length > 900 || c.text.split('\n').length > 18
+  const kind = c.kind ? KIND_STYLE[c.kind] : null
+  const who = c.role ? c.role + ' · @' + c.handle : c.author
+  return jsxs('div', {
+    style: {
+      paddingTop: '0.5rem',
+      paddingBottom: last ? 0 : '0.75rem',
+      borderBottom: last ? 'none' : '1px solid var(--ui-stroke-secondary)',
+      borderLeft: kind ? '3px solid ' + kind.color : undefined,
+      paddingLeft: kind ? '0.625rem' : undefined
+    },
+    children: [
+      jsxs('div', {
+        className: 'flex flex-wrap items-center gap-x-2 gap-y-1 text-xs',
+        children: [
+          jsx('span', {
+            className: c.role ? 'rounded-full border border-(--ui-stroke-secondary) bg-(--ui-bg-tertiary) px-2 font-semibold text-(--ui-text-secondary)' : 'font-semibold text-(--ui-text-secondary)',
+            title: c.role ? 'Posted by ' + c.author + ' on behalf of ' + c.role : undefined,
+            children: who
+          }),
+          kind
+            ? jsx('span', { className: 'rounded-full px-2 font-semibold', style: { color: kind.color, border: '1px solid ' + kind.color, fontSize: '0.6875rem' }, children: kind.label })
+            : null,
+          jsx('span', { className: 'text-(--ui-text-tertiary)', title: c.created_at ? new Date(c.created_at).toLocaleString() : undefined, children: ago(c.created_at) }),
+          c.updated_at && c.updated_at !== c.created_at ? jsx('span', { className: 'text-(--ui-text-quaternary)', children: '(edited)' }) : null,
+          jsx('button', {
+            type: 'button',
+            className: 'ml-auto text-(--ui-text-quaternary) underline',
+            title: 'Open this comment on GitHub',
+            onClick: () => CTX && CTX.os.openExternal(c.url),
+            children: 'GitHub'
+          })
+        ]
+      }),
+      jsx('div', {
+        style: { marginTop: '0.375rem', maxHeight: long && !more ? COMMENT_CLIP_REM + 'rem' : undefined, overflow: long && !more ? 'hidden' : undefined },
+        children: jsx(Markdown, { source: c.text })
+      }),
+      long
+        ? jsx('button', { type: 'button', className: 'pt-1 text-xs text-(--ui-text-tertiary) underline', onClick: () => setMore(m => !m), children: more ? 'Show less' : 'Show more' })
+        : null
+    ]
+  })
+}
+
+/** The Comments section of an issue: same outer container and header toggle as Sub-issues, shown below it. Read-only.
+ *  Collapsed by default; the comments are fetched the first time it is expanded (the count before that is the list payload's). */
+function CommentsSection({ repo, issue, indent = TITLE_INDENT }) {
+  const key = repo + '#' + issue.number
+  const [collapsed, setCollapsedState] = useState(() => !COMMENTS_OPEN.has(key))
+  const [items, setItems] = useState(null)
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const started = useRef(false)
+  const note = 'py-2 text-xs text-(--ui-text-tertiary)'
+
+  const load = useCallback(() => {
+    setErr(null)
+    setBusy(true)
+    listComments(repo, issue.number).then(
+      list => {
+        setItems(list)
+        setBusy(false)
+      },
+      e => {
+        setErr(e.message || String(e))
+        setBusy(false)
+      }
+    )
+  }, [repo, issue.number])
+
+  // Loaded as soon as the issue row is open (and only if it has comments), so expanding the section never swaps a "Loading…" line for content.
+  useEffect(() => {
+    if (!started.current && (issue.comments || 0) > 0) {
+      started.current = true
+      load()
+    }
+  }, [load])
+
+  const toggle = () => {
+    haptic('tap')
+    setCollapsedState(c => {
+      if (c) COMMENTS_OPEN.add(key)
+      else COMMENTS_OPEN.delete(key)
+      return !c
+    })
+  }
+  const count = items ? items.length : issue.comments || 0
+
+  // No comments => no section at all.
+  if (count === 0) return null
+
+  return jsxs('div', {
+    style: { ...PANEL_STYLE, marginLeft: indent },
+    children: [
+      jsxs('div', {
+        className: 'flex cursor-pointer items-center gap-2 text-xs font-semibold text-(--ui-text-secondary)',
+        // Fixed box: the header is exactly the same height collapsed or expanded (the pill is the tallest item), so toggling moves nothing above or around it.
+        style: { height: '1.125rem', lineHeight: '1rem', alignItems: 'center' },
+        role: 'button',
+        tabIndex: 0,
+        'aria-expanded': !collapsed,
+        'aria-label': (collapsed ? 'Expand' : 'Collapse') + ' comments',
+        title: (collapsed ? 'Expand' : 'Collapse') + ' comments',
+        onClick: toggle,
+        onKeyDown: e => {
+          if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault()
+            toggle()
+          }
+        },
+        children: [
+          jsxs('span', {
+            className: 'inline-flex items-center gap-1.5',
+            // Chevron, label and bubble all share one centre line. The label goes through BarText (the same 1px nudge the Open / Closed bar
+            // uses): lower-case glyphs sit ~1px below the middle of their line box, so un-nudged text reads as low next to the centred icon and bubble.
+            children: [jsx(Icon, { key: 'c', path: collapsed ? CHEVRON_RIGHT_PATH : CHEVRON_DOWN_PATH, size: 16, className: 'text-(--ui-text-tertiary)' }), jsx(BarText, { key: 't', children: 'Comments' })]
+          }),
+          // The same counter bubble as the Open / Closed buttons (CountBubble): 14px tall, 28px min width, same fill and type.
+          jsx(CountBubble, { children: count.toLocaleString() })
+        ]
+      }),
+      jsxs('div', {
+        style: collapsed ? { display: 'none' } : { paddingTop: '0.25rem' },
+        children: [
+          items === null && !err ? jsx('div', { className: note, style: { marginLeft: SUB_ROW_INDENT }, children: 'Loading comments…' }) : null,
+          err
+            ? jsxs('div', {
+                className: 'flex items-center gap-2 py-2 text-xs text-(--ui-red)',
+                style: { marginLeft: SUB_ROW_INDENT },
+                children: [err, jsx(Button, { type: 'button', size: 'sm', variant: 'ghost', onClick: load, children: 'Retry' })]
+              })
+            : null,
+          items && items.length === 0 ? jsx('div', { className: note, style: { marginLeft: SUB_ROW_INDENT }, children: 'No comments yet.' }) : null,
+          items && items.length > 0
+            ? jsx('div', { children: items.map((c, i) => jsx(CommentCard, { key: c.id, c, last: i === items.length - 1 })) })
+            : null
+        ]
+      })
+    ]
+  })
+}
+
 function IssueRow({ repo, issue, canClose, labels, last, collapseSubs, onClosed, onUpdated, onDeleted, onStale }) {
   const pinsCtx = useContext(PinsContext)
   const [error, setError] = useState(null)
@@ -2844,6 +3043,7 @@ function IssueRow({ repo, issue, canClose, labels, last, collapseSubs, onClosed,
       ROW_OPEN.delete(k)
       OPEN_SUB.delete(k)
       SECTION_COLLAPSED.delete(k)
+      COMMENTS_OPEN.delete(k)
     }
     setSubs(prev => (prev ? prev.filter(x => !nums.includes(x.number)) : prev))
     if (onDeleted) onDeleted(nums)
@@ -2969,7 +3169,9 @@ function IssueRow({ repo, issue, canClose, labels, last, collapseSubs, onClosed,
               onStale && onStale()
             }
           })
-        : null
+        : null,
+      // Below the Sub-issues section: same container, same toggle, label "Comments".
+      open ? jsx(CommentsSection, { repo, issue }) : null
     ]
   })
 }
